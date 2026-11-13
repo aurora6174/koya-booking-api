@@ -2,8 +2,8 @@
 
 A booking API plus a small web page for a clinic: patients see open appointment slots, book one, and get a confirmation. Built for Task 1 of the Koya Cohort 4 assessment against the [spec](https://koyaacademy.com/assessment-api). **All five levels are implemented**, and there's an end-to-end test for each one.
 
-- **API base URL:** `https://<your-app>.vercel.app`
-- **Web page:** `https://<your-app>.vercel.app/`
+- **API base URL:** `https://koya-booking-api-ten.vercel.app`
+- **Web page:** https://koya-booking-api-ten.vercel.app/
 - **Stack:** Python 3.12 · FastAPI · Postgres (Neon) · Vercel serverless
 
 ## How each level is enforced
