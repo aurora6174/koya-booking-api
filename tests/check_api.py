@@ -231,11 +231,11 @@ def level5():
 
 
 def seed_demo():
-    """Friendly slots for the web page: next 7 days, three providers."""
+    """Friendly slots for the web page: next 4 weeks, three providers."""
     providers = ["Dr Ade", "Dr Bello", "Dr Okafor"]
     today = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
     slots = []
-    for day in range(1, 8):
+    for day in range(1, 29):
         date = today + timedelta(days=day)
         for p, provider in enumerate(providers):
             for h in (8, 9, 10, 13, 14):
