@@ -78,8 +78,8 @@ async def handle_unexpected(_: Request, exc: Exception):
 async def require_api_key(request: Request, call_next):
     if request.method == "OPTIONS" or request.url.path in PUBLIC_PATHS:
         return await call_next(request)
-    expected = os.environ.get("API_KEY", "")
-    given = request.headers.get("x-api-key", "")
+    expected = os.environ.get("API_KEY", "").strip()  # tolerate a stray space/newline in the env var
+    given = request.headers.get("x-api-key", "").strip()
     # compare_digest takes the same time whether the first or last character differs
     if not expected or not hmac.compare_digest(given.encode(), expected.encode()):
         return error(401, "missing or invalid API key")
