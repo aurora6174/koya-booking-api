@@ -25,18 +25,24 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .db import connect
 
-RATE_LIMIT = 5             # booking attempts...
-RATE_WINDOW_SECONDS = 60   # ...per email per this many seconds
+RATE_LIMIT = 5  # booking attempts...
+RATE_WINDOW_SECONDS = 60  # ...per email per this many seconds
 MAX_PAGE_SIZE = 50
 DEFAULT_PAGE_SIZE = 10
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 WEB_PAGE = Path(__file__).resolve().parent.parent / "web" / "index.html"
-PUBLIC_PATHS = {"/", "/favicon.ico"}  # the web page itself; it sends the key on its API calls
+PUBLIC_PATHS = {
+    "/",
+    "/favicon.ico",
+}  # the web page itself; it sends the key on its API calls
 
-app = FastAPI(title="Clinic booking API", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(
+    title="Clinic booking API", docs_url=None, redoc_url=None, openapi_url=None
+)
 
 
 # ---------------------------------------------------------------- errors
+
 
 class ApiError(Exception):
     def __init__(self, status: int, message: str, headers: dict | None = None):
@@ -56,7 +62,11 @@ async def handle_api_error(_: Request, exc: ApiError):
 @app.exception_handler(StarletteHTTPException)
 async def handle_http_error(_: Request, exc: StarletteHTTPException):
     defaults = {404: "not found", 405: "method not allowed"}
-    message = exc.detail if isinstance(exc.detail, str) else defaults.get(exc.status_code, "error")
+    message = (
+        exc.detail
+        if isinstance(exc.detail, str)
+        else defaults.get(exc.status_code, "error")
+    )
     if exc.status_code in defaults and message in ("Not Found", "Method Not Allowed"):
         message = defaults[exc.status_code]
     return error(exc.status_code, message)
@@ -74,11 +84,14 @@ async def handle_unexpected(_: Request, exc: Exception):
 
 # ---------------------------------------------------------------- level 2: API key
 
+
 @app.middleware("http")
 async def require_api_key(request: Request, call_next):
     if request.method == "OPTIONS" or request.url.path in PUBLIC_PATHS:
         return await call_next(request)
-    expected = os.environ.get("API_KEY", "").strip()  # tolerate a stray space/newline in the env var
+    expected = os.environ.get(
+        "API_KEY", ""
+    ).strip()  # tolerate a stray space/newline in the env var
     given = request.headers.get("x-api-key", "").strip()
     # compare_digest takes the same time whether the first or last character differs
     if not expected or not hmac.compare_digest(given.encode(), expected.encode()):
@@ -99,6 +112,7 @@ app.add_middleware(
 
 # ---------------------------------------------------------------- helpers
 
+
 async def read_json(request: Request) -> tuple[object, bytes]:
     raw = await request.body()
     try:
@@ -116,7 +130,11 @@ def parse_datetime(value: str) -> datetime | None:
 
 
 def iso(dt: datetime) -> str:
-    return dt.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return (
+        dt.astimezone(timezone.utc)
+        .isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z")
+    )
 
 
 def booking_json(row: dict) -> dict:
@@ -152,6 +170,7 @@ def decode_cursor(cursor: str) -> int:
 
 # ---------------------------------------------------------------- web page
 
+
 @app.get("/", include_in_schema=False)
 async def web_page():
     return HTMLResponse(WEB_PAGE.read_text(encoding="utf-8"))
@@ -159,19 +178,24 @@ async def web_page():
 
 # ---------------------------------------------------------------- level 1: reset + slots
 
+
 @app.post("/reset")
 async def reset(request: Request):
     body, _ = await read_json(request)
     slots = body.get("slots") if isinstance(body, dict) else None
     if not isinstance(slots, list):
-        raise ApiError(400, "body must be {\"slots\": [...]}")
+        raise ApiError(400, 'body must be {"slots": [...]}')
 
     rows, seen = [], set()
     for i, slot in enumerate(slots):
         if not isinstance(slot, dict):
             raise ApiError(400, f"slots[{i}] must be an object")
-        sid, provider, start, end = (slot.get(k) for k in ("id", "provider", "start", "end"))
-        if not all(isinstance(v, str) and v.strip() for v in (sid, provider, start, end)):
+        sid, provider, start, end = (
+            slot.get(k) for k in ("id", "provider", "start", "end")
+        )
+        if not all(
+            isinstance(v, str) and v.strip() for v in (sid, provider, start, end)
+        ):
             raise ApiError(400, f"slots[{i}] needs id, provider, start and end")
         start_at, end_at = parse_datetime(start), parse_datetime(end)
         if not start_at or not end_at:
@@ -183,7 +207,9 @@ async def reset(request: Request):
 
     async with await connect() as conn:
         # One transaction: nobody ever sees a half-reset database.
-        await conn.execute("TRUNCATE bookings, slots, idempotency_keys, booking_attempts")
+        await conn.execute(
+            "TRUNCATE bookings, slots, idempotency_keys, booking_attempts"
+        )
         async with conn.cursor() as cur:
             await cur.executemany(
                 "INSERT INTO slots (id, provider, start_raw, end_raw, start_at, end_at)"
@@ -210,8 +236,13 @@ async def list_slots(provider: str | None = None):
         rows = await cur.fetchall()
     return {
         "slots": [
-            {"id": r["id"], "provider": r["provider"], "start": r["start_raw"],
-             "end": r["end_raw"], "available": r["available"]}
+            {
+                "id": r["id"],
+                "provider": r["provider"],
+                "start": r["start_raw"],
+                "end": r["end_raw"],
+                "available": r["available"],
+            }
             for r in rows
         ]
     }
@@ -219,17 +250,26 @@ async def list_slots(provider: str | None = None):
 
 # ---------------------------------------------------------------- levels 1-5: create a booking
 
+
+# Front door of the function
 @app.post("/bookings")
 async def create_booking(request: Request):
+
+    # Read the form
     body, raw = await read_json(request)
+
+    # Read the receipt number
     idem_key = request.headers.get("idempotency-key", "").strip()
     if len(idem_key) > 255:
         return error(400, "Idempotency-Key is too long")
+
     # Fingerprint the body so a reused key with a *different* body can be caught (level 4).
     canonical = json.dumps(body, sort_keys=True).encode() if body is not None else raw
     fingerprint = hashlib.sha256(canonical).hexdigest()
 
+    # Open the database: all or nothing. From here on, everything is one transaction.
     async with await connect() as conn:
+        # Claim the receipt number
         if idem_key:
             # Claim the key. If another request holds it (even one still running),
             # Postgres makes this INSERT wait until that request commits.
@@ -245,12 +285,19 @@ async def create_booking(request: Request):
                 )
                 saved = await cur.fetchone()
                 if saved["fingerprint"] != fingerprint:
-                    return error(422, "Idempotency-Key was already used with a different request body")
-                return JSONResponse(saved["response"], status_code=saved["status_code"],
-                                    headers={"Idempotent-Replayed": "true"})
-
+                    return error(
+                        422,
+                        "Idempotency-Key was already used with a different request body",
+                    )
+                return JSONResponse(
+                    saved["response"],
+                    status_code=saved["status_code"],
+                    headers={"Idempotent-Replayed": "true"},
+                )
+        # Hand over to book_slot
         status, payload, headers = await book_slot(conn, body)
 
+        # After the work: undo, or remember
         if status == 429:
             # Throw away the key claim: a rate-limited request should be retryable later.
             await conn.rollback()
@@ -259,7 +306,8 @@ async def create_booking(request: Request):
                 "UPDATE idempotency_keys SET status_code = %s, response = %s WHERE key = %s",
                 (status, Jsonb(payload), idem_key),
             )
-    # Leaving the `async with` commits, so we only answer once the booking is durable.
+    # Save first, reply second: leaving the `async with` commits, so we only answer
+    # once the booking is durable.
     return JSONResponse(payload, status_code=status, headers=headers)
 
 
@@ -290,8 +338,13 @@ async def book_slot(conn, body) -> tuple[int, dict, dict | None]:
         window = await cur.fetchone()
         if window["attempts"] >= RATE_LIMIT:
             seconds = window["retry_after"]
-            return 429, {"error": f"too many booking attempts for this email, retry in {seconds}s"}, \
-                {"Retry-After": str(seconds)}
+            return (
+                429,
+                {
+                    "error": f"too many booking attempts for this email, retry in {seconds}s"
+                },
+                {"Retry-After": str(seconds)},
+            )
         await conn.execute("INSERT INTO booking_attempts (email) VALUES (%s)", (email,))
         await conn.execute(  # housekeeping: forget attempts older than an hour
             "DELETE FROM booking_attempts WHERE email = %s AND attempted_at < clock_timestamp() - interval '1 hour'",
@@ -299,7 +352,11 @@ async def book_slot(conn, body) -> tuple[int, dict, dict | None]:
         )
 
     # Level 2: validation.
-    missing = [field for field, value in (("slot_id", slot_id), ("name", name), ("email", email)) if not value]
+    missing = [
+        field
+        for field, value in (("slot_id", slot_id), ("name", name), ("email", email))
+        if not value
+    ]
     if missing:
         return 400, {"error": f"{', '.join(missing)} is required"}, None
     if len(email) > 254 or not EMAIL_RE.match(email):
@@ -330,6 +387,7 @@ async def book_slot(conn, body) -> tuple[int, dict, dict | None]:
 
 # ---------------------------------------------------------------- level 4: list a person's bookings
 
+
 @app.get("/bookings")
 async def list_bookings(request: Request):
     params = request.query_params
@@ -351,7 +409,11 @@ async def list_bookings(request: Request):
     async with await connect() as conn:
         cur = await conn.execute(
             "SELECT * FROM bookings WHERE email = %s AND seq > %s ORDER BY seq LIMIT %s",
-            (email, after, limit + 1),  # one extra row tells us whether another page exists
+            (
+                email,
+                after,
+                limit + 1,
+            ),  # one extra row tells us whether another page exists
         )
         rows = await cur.fetchall()
 
@@ -361,6 +423,7 @@ async def list_bookings(request: Request):
 
 
 # ---------------------------------------------------------------- level 1 + 3: get / cancel one booking
+
 
 @app.get("/bookings/{booking_id}")
 async def get_booking(booking_id: str):
@@ -382,7 +445,12 @@ async def cancel_booking(booking_id: str):
         )
         row = await cur.fetchone()
         if row is None:
-            cur = await conn.execute("SELECT 1 FROM bookings WHERE id = %s", (booking_id,))
+            cur = await conn.execute(
+                "SELECT 1 FROM bookings WHERE id = %s", (booking_id,)
+            )
             exists = await cur.fetchone()
-            raise ApiError(409 if exists else 404, "booking is already cancelled" if exists else "booking not found")
+            raise ApiError(
+                409 if exists else 404,
+                "booking is already cancelled" if exists else "booking not found",
+            )
     return booking_json(row)
