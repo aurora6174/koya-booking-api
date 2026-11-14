@@ -122,6 +122,14 @@
 
   dialog { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); padding: 24px; width: min(440px, calc(100vw - 32px)); }
   dialog::backdrop { background: rgba(0,0,0,.35); }
+  .btn-danger-solid { background: var(--danger); border-color: var(--danger); color: #fff; }
+  .btn-danger-solid:hover:not(:disabled) { background: var(--danger); filter: brightness(1.08); }
+  .toast { position: fixed; left: 50%; bottom: 24px; z-index: 50; transform: translate(-50%, 16px); opacity: 0; pointer-events: none;
+           transition: opacity .2s, transform .2s; display: flex; gap: 10px; align-items: center; max-width: calc(100vw - 32px);
+           background: var(--surface); color: var(--text); border: 1px solid var(--ok); border-radius: 12px; padding: 12px 16px;
+           box-shadow: 0 10px 30px rgba(0,0,0,.25); font-size: 14px; }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+  .toast svg { width: 18px; height: 18px; flex: none; fill: none; stroke: var(--ok); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
 </style>
 </head>
 <body>
@@ -186,6 +194,18 @@
     </div>
   </form>
 </dialog>
+
+<dialog id="cancelDialog" aria-labelledby="cancelTitle">
+  <h2 id="cancelTitle" style="margin-top:0">Cancel this appointment?</h2>
+  <p id="cancelWhat" style="font-weight:600;margin:0 0 6px"></p>
+  <p class="muted small" style="margin-top:0">The time will be released for someone else to book. This can't be undone.</p>
+  <div class="row" style="justify-content:flex-end">
+    <button class="btn" type="button" id="keepBtn">Keep my booking</button>
+    <button class="btn btn-danger-solid" type="button" id="confirmCancelBtn">Yes, cancel it</button>
+  </div>
+</dialog>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script>
 const API = location.origin;   // the API and this page share an origin
@@ -400,13 +420,54 @@ function renderConfirmation(b) {
     </div>
     <div id="confirmMsg"></div>`;
   $("#anotherBtn").onclick = () => { selected = null; renderEmptyPanel(); loadSlots(); };
-  if (!cancelled) $("#cancelBtn").onclick = () => cancel(b.id, (nb) => renderConfirmation(nb), "#confirmMsg");
+  if (!cancelled) $("#cancelBtn").onclick = (e) => cancel(b.id, (nb) => renderConfirmation(nb), "#confirmMsg", e.currentTarget, slotLabel(b.slot_id));
 }
 
-async function cancel(id, onDone, msgSel) {
-  if (!confirm("Cancel this booking? The slot will be released.")) return;
-  const r = await api("DELETE", "/bookings/" + encodeURIComponent(id));
-  if (r.status === 200) { onDone(r.data); loadSlots(); if ($("#mineEmail").value) loadMine(true); return; }
+// A clear "are you sure?" dialog. The browser's own confirm() has OK/Cancel buttons,
+// where "Cancel" means "don't cancel the booking" - easy to misread.
+function askCancel(label) {
+  const d = $("#cancelDialog");
+  $("#cancelWhat").textContent = label;
+  return new Promise((resolve) => {
+    const done = (yes) => { d.close(); resolve(yes); };
+    $("#keepBtn").onclick = () => done(false);
+    $("#confirmCancelBtn").onclick = () => done(true);
+    d.oncancel = (e) => { e.preventDefault(); done(false); }; // Esc key = keep it
+    d.showModal();
+    $("#keepBtn").focus();
+  });
+}
+
+let toastTimer;
+function toast(message) {
+  const t = $("#toast");
+  t.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg><span>${esc(message)}</span>`;
+  t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 4000);
+}
+
+async function cancel(id, onDone, msgSel, btn, label) {
+  if (!(await askCancel(label))) return;
+  const original = btn?.textContent;
+  if (btn) { btn.disabled = true; btn.textContent = "Cancelling…"; }
+  const restore = () => { if (btn) { btn.disabled = false; btn.textContent = original; } };
+  let r;
+  try {
+    r = await api("DELETE", "/bookings/" + encodeURIComponent(id));
+  } catch {
+    restore();
+    $(msgSel).innerHTML = notice("error", "Couldn't reach the clinic. Please try again.");
+    return;
+  }
+  if (r.status === 200) {
+    onDone(r.data);
+    toast("Booking cancelled. The time is free for someone else.");
+    loadSlots();
+    if ($("#mineEmail").value) loadMine(true);
+    return;
+  }
+  restore();
   $(msgSel).innerHTML = notice("error", sentence(r.data.error || "Couldn't cancel."));
 }
 
@@ -440,7 +501,7 @@ function bookingItem(b) {
   if (b.status === "confirmed") {
     const c = document.createElement("button");
     c.className = "btn btn-danger"; c.type = "button"; c.textContent = "Cancel";
-    c.onclick = () => cancel(b.id, (nb) => el.replaceWith(bookingItem(nb)), "#mine");
+    c.onclick = () => cancel(b.id, (nb) => el.replaceWith(bookingItem(nb)), "#mine", c, slotLabel(b.slot_id));
     el.append(c);
   }
   return el;
